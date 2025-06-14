@@ -17,6 +17,17 @@
 char last_command[MAX_CMD_BUFFER];
 int script_mode = 0;
 
+void parse_command(char* input, char* argv[]) {
+    int argc = 0;
+    char* token = strtok(input, " \t\n");
+    
+    while (token != NULL && argc < MAX_ARGS - 1) {
+        argv[argc++] = token;
+        token = strtok(NULL, " \t\n");
+    }
+    argv[argc] = NULL;
+}
+
 void handle_echo(char* input) {
     char* echo_text = input + 5;
     printf("%s", echo_text);

@@ -48,18 +48,31 @@ void handle_exit(char* input) {
     exit(exit_code);
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     char buffer[MAX_CMD_BUFFER];
+    FILE* input_stream = stdin;
+    int script_mode = 0;
     
-    printf("Starting IC shell\n");
+    if (argc > 1) {
+        input_stream = fopen(argv[1], "r");
+        if (input_stream == NULL) {
+            fprintf(stderr, "Error: Cannot open file %s\n", argv[1]);
+            exit(1);
+        }
+        script_mode = 1;
+    } else {
+        printf("Starting IC shell\n");
+    }
     
     memset(last_command, 0, MAX_CMD_BUFFER);
     
     while (1) {
-        printf("icsh $ ");
-        fflush(stdout);
+        if (!script_mode) {
+            printf("icsh $ ");
+            fflush(stdout);
+        }
         
-        if (fgets(buffer, MAX_CMD_BUFFER, stdin) == NULL) {
+        if (fgets(buffer, MAX_CMD_BUFFER, input_stream) == NULL) {
             break;
         }
         
@@ -84,6 +97,10 @@ int main() {
         else {
             printf("bad command\n");
         }
+    }
+    
+    if (script_mode) {
+        fclose(input_stream);
     }
     
     return 0;

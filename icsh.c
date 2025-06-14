@@ -72,8 +72,7 @@ void handle_double_bang() {
             handle_echo(last_command);
         }
         else if (strcmp(temp, "!!") != 0) {
-            strcpy(last_command, temp);
-            strcat(last_command, "\n");
+            execute_external_command(last_command);
         }
     }
 }
@@ -139,7 +138,8 @@ int main(int argc, char* argv[]) {
             handle_exit(buffer);
         }
         else {
-            printf("bad command\n");
+            execute_external_command(buffer);
+            strcpy(last_command, buffer);
         }
     }
     

@@ -18,6 +18,19 @@
 char last_command[MAX_CMD_BUFFER];
 int script_mode = 0;
 int last_exit_status = 0;
+pid_t foreground_pid = 0;
+
+void sigint_handler(int sig) {
+    if (foreground_pid > 0) {
+        kill(foreground_pid, SIGINT);
+    }
+}
+
+void sigtstp_handler(int sig) {
+    if (foreground_pid > 0) {
+        kill(foreground_pid, SIGTSTP);
+    }
+}
 
 void parse_command(char* input, char* argv[]) {
     int argc = 0;
@@ -46,12 +59,17 @@ void execute_external_command(char* input) {
         return;
     }
     else if (pid == 0) {
+        signal(SIGINT, SIG_DFL);
+        signal(SIGTSTP, SIG_DFL);
         execvp(argv[0], argv);
         perror(argv[0]);
         exit(127);
     }
     else {
+        foreground_pid = pid;
         waitpid(pid, &status, 0);
+        foreground_pid = 0;
+        
         if (WIFEXITED(status)) {
             last_exit_status = WEXITSTATUS(status);
         }
@@ -106,6 +124,9 @@ void handle_exit(char* input) {
 int main(int argc, char* argv[]) {
     char buffer[MAX_CMD_BUFFER];
     FILE* input_stream = stdin;
+    
+    signal(SIGINT, sigint_handler);
+    signal(SIGTSTP, sigtstp_handler);
     
     if (argc > 1) {
         input_stream = fopen(argv[1], "r");

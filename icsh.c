@@ -60,7 +60,12 @@ void execute_external_command(char* input) {
 
 void handle_echo(char* input) {
     char* echo_text = input + 5;
-    printf("%s", echo_text);
+    
+    if (strncmp(echo_text, "$?", 2) == 0) {
+        printf("%d\n", last_exit_status);
+    } else {
+        printf("%s", echo_text);
+    }
     last_exit_status = 0;
 }
 

@@ -20,7 +20,9 @@ void handle_echo(char* input) {
 
 void handle_double_bang() {
     if (strlen(last_command) > 0) {
-        printf("%s", last_command);
+        if (!script_mode) {
+            printf("%s", last_command);
+        }
         
         char temp[MAX_CMD_BUFFER];
         strcpy(temp, last_command);

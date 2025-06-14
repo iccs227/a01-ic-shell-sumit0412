@@ -10,12 +10,14 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <signal.h>
 
 #define MAX_CMD_BUFFER 255
 #define MAX_ARGS 64
 
 char last_command[MAX_CMD_BUFFER];
 int script_mode = 0;
+int last_exit_status = 0;
 
 void parse_command(char* input, char* argv[]) {
     int argc = 0;
@@ -50,12 +52,16 @@ void execute_external_command(char* input) {
     }
     else {
         waitpid(pid, &status, 0);
+        if (WIFEXITED(status)) {
+            last_exit_status = WEXITSTATUS(status);
+        }
     }
 }
 
 void handle_echo(char* input) {
     char* echo_text = input + 5;
     printf("%s", echo_text);
+    last_exit_status = 0;
 }
 
 void handle_double_bang() {

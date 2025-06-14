@@ -11,6 +11,7 @@
 #define MAX_CMD_BUFFER 255
 
 char last_command[MAX_CMD_BUFFER];
+int script_mode = 0;
 
 void handle_echo(char* input) {
     char* echo_text = input + 5;
@@ -44,14 +45,15 @@ void handle_exit(char* input) {
         exit_code = atoi(exit_arg) & 0xFF;
     }
     
-    printf("bye\n");
+    if (!script_mode) {
+        printf("bye\n");
+    }
     exit(exit_code);
 }
 
 int main(int argc, char* argv[]) {
     char buffer[MAX_CMD_BUFFER];
     FILE* input_stream = stdin;
-    int script_mode = 0;
     
     if (argc > 1) {
         input_stream = fopen(argv[1], "r");

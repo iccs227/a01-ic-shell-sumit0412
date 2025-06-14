@@ -7,8 +7,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
 
 #define MAX_CMD_BUFFER 255
+#define MAX_ARGS 64
 
 char last_command[MAX_CMD_BUFFER];
 int script_mode = 0;

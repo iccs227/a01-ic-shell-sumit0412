@@ -28,6 +28,31 @@ void parse_command(char* input, char* argv[]) {
     argv[argc] = NULL;
 }
 
+void execute_external_command(char* input) {
+    pid_t pid;
+    int status;
+    char* argv[MAX_ARGS];
+    char cmd_copy[MAX_CMD_BUFFER];
+    
+    strcpy(cmd_copy, input);
+    parse_command(cmd_copy, argv);
+    
+    pid = fork();
+    
+    if (pid < 0) {
+        perror("Fork failed");
+        return;
+    }
+    else if (pid == 0) {
+        execvp(argv[0], argv);
+        perror(argv[0]);
+        exit(127);
+    }
+    else {
+        waitpid(pid, &status, 0);
+    }
+}
+
 void handle_echo(char* input) {
     char* echo_text = input + 5;
     printf("%s", echo_text);

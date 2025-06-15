@@ -11,6 +11,7 @@
 #include <sys/wait.h>
 #include <errno.h>
 #include <signal.h>
+#include <fcntl.h>
 
 #define MAX_CMD_BUFFER 255
 #define MAX_ARGS 64
@@ -44,14 +45,45 @@ void parse_command(char* input, char* argv[]) {
     argv[argc] = NULL;
 }
 
+int parse_redirection(char* input, char* argv[], char** input_file, char** output_file) {
+    int argc = 0;
+    char* token = strtok(input, " \t\n");
+    
+    *input_file = NULL;
+    *output_file = NULL;
+    
+    while (token != NULL && argc < MAX_ARGS - 1) {
+        if (strcmp(token, "<") == 0) {
+            token = strtok(NULL, " \t\n");
+            if (token != NULL) {
+                *input_file = token;
+            }
+        }
+        else if (strcmp(token, ">") == 0) {
+            token = strtok(NULL, " \t\n");
+            if (token != NULL) {
+                *output_file = token;
+            }
+        }
+        else {
+            argv[argc++] = token;
+        }
+        token = strtok(NULL, " \t\n");
+    }
+    argv[argc] = NULL;
+    return argc;
+}
+
 void execute_external_command(char* input) {
     pid_t pid;
     int status;
     char* argv[MAX_ARGS];
     char cmd_copy[MAX_CMD_BUFFER];
+    char* input_file = NULL;
+    char* output_file = NULL;
     
     strcpy(cmd_copy, input);
-    parse_command(cmd_copy, argv);
+    parse_redirection(cmd_copy, argv, &input_file, &output_file);
     
     pid = fork();
     
@@ -62,6 +94,27 @@ void execute_external_command(char* input) {
     else if (pid == 0) {
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
+        
+        if (input_file != NULL) {
+            int fd_in = open(input_file, O_RDONLY);
+            if (fd_in < 0) {
+                perror(input_file);
+                exit(1);
+            }
+            dup2(fd_in, STDIN_FILENO);
+            close(fd_in);
+        }
+        
+        if (output_file != NULL) {
+            int fd_out = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            if (fd_out < 0) {
+                perror(output_file);
+                exit(1);
+            }
+            dup2(fd_out, STDOUT_FILENO);
+            close(fd_out);
+        }
+        
         execvp(argv[0], argv);
         perror(argv[0]);
         exit(127);

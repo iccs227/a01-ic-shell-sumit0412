@@ -15,22 +15,136 @@
 
 #define MAX_CMD_BUFFER 255
 #define MAX_ARGS 64
+#define MAX_JOBS 64
+
+typedef enum {
+    RUNNING,
+    STOPPED,
+    DONE
+} job_status_t;
+
+typedef struct {
+    int job_id;
+    pid_t pid;
+    pid_t pgid;
+    job_status_t status;
+    char command[MAX_CMD_BUFFER];
+    int is_background;
+} job_t;
 
 char last_command[MAX_CMD_BUFFER];
 int script_mode = 0;
 int last_exit_status = 0;
 pid_t foreground_pid = 0;
+pid_t shell_pgid;
+job_t jobs[MAX_JOBS];
+int next_job_id = 1;
+
+void init_jobs() {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        jobs[i].job_id = 0;
+        jobs[i].pid = 0;
+        jobs[i].pgid = 0;
+        jobs[i].status = DONE;
+        jobs[i].command[0] = '\0';
+        jobs[i].is_background = 0;
+    }
+}
+
+int add_job(pid_t pid, pid_t pgid, char* command, int is_background) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].job_id == 0) {
+            jobs[i].job_id = next_job_id++;
+            jobs[i].pid = pid;
+            jobs[i].pgid = pgid;
+            jobs[i].status = RUNNING;
+            strncpy(jobs[i].command, command, MAX_CMD_BUFFER - 1);
+            jobs[i].command[MAX_CMD_BUFFER - 1] = '\0';
+            jobs[i].is_background = is_background;
+            return jobs[i].job_id;
+        }
+    }
+    return -1;
+}
+
+job_t* find_job_by_id(int job_id) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].job_id == job_id) {
+            return &jobs[i];
+        }
+    }
+    return NULL;
+}
+
+job_t* find_job_by_pid(pid_t pid) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].pid == pid) {
+            return &jobs[i];
+        }
+    }
+    return NULL;
+}
+
+void remove_job(int job_id) {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].job_id == job_id) {
+            jobs[i].job_id = 0;
+            jobs[i].pid = 0;
+            jobs[i].pgid = 0;
+            jobs[i].status = DONE;
+            jobs[i].command[0] = '\0';
+            jobs[i].is_background = 0;
+            break;
+        }
+    }
+}
+
+void cleanup_jobs() {
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].job_id > 0 && jobs[i].status == DONE) {
+            remove_job(jobs[i].job_id);
+        }
+    }
+}
+
+void sigchld_handler(int sig) {
+    pid_t pid;
+    int status;
+    
+    while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
+        job_t* job = find_job_by_pid(pid);
+        if (job != NULL) {
+            if (WIFEXITED(status) || WIFSIGNALED(status)) {
+                job->status = DONE;
+                if (job->is_background) {
+                    printf("\n[%d]+  Done                    %s", job->job_id, job->command);
+                    fflush(stdout);
+                }
+                last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+            } else if (WIFSTOPPED(status)) {
+                job->status = STOPPED;
+                printf("\n[%d]+  Stopped                 %s", job->job_id, job->command);
+                fflush(stdout);
+            }
+        }
+    }
+}
 
 void sigint_handler(int sig) {
     if (foreground_pid > 0) {
-        kill(foreground_pid, SIGINT);
+        kill(-foreground_pid, SIGINT);
+    } else {
+        printf("\n");
+        if (!script_mode) {
+            printf("icsh $ ");
+            fflush(stdout);
+        }
     }
-    printf("\n");
 }
 
 void sigtstp_handler(int sig) {
     if (foreground_pid > 0) {
-        kill(foreground_pid, SIGTSTP);
+        kill(-foreground_pid, SIGTSTP);
     }
 }
 
@@ -87,6 +201,18 @@ int has_redirection(char* input) {
     return (strstr(input, " > ") != NULL || strstr(input, " < ") != NULL || strstr(input, " >> ") != NULL);
 }
 
+int is_background_command(char* input) {
+    char* trimmed = input;
+    while (*trimmed && (*trimmed == ' ' || *trimmed == '\t')) trimmed++;
+    
+    int len = strlen(trimmed);
+    while (len > 0 && (trimmed[len-1] == ' ' || trimmed[len-1] == '\t' || trimmed[len-1] == '\n')) {
+        len--;
+    }
+    
+    return (len > 0 && trimmed[len-1] == '&');
+}
+
 void execute_external_command(char* input) {
     pid_t pid;
     int status;
@@ -95,8 +221,18 @@ void execute_external_command(char* input) {
     char* input_file = NULL;
     char* output_file = NULL;
     int append_mode = 0;
+    int background = is_background_command(input);
     
     strcpy(cmd_copy, input);
+    
+    if (background) {
+        int len = strlen(cmd_copy);
+        while (len > 0 && (cmd_copy[len-1] == '&' || cmd_copy[len-1] == ' ' || cmd_copy[len-1] == '\t' || cmd_copy[len-1] == '\n')) {
+            cmd_copy[len-1] = '\0';
+            len--;
+        }
+    }
+    
     parse_redirection(cmd_copy, argv, &input_file, &output_file, &append_mode);
     
     pid = fork();
@@ -106,8 +242,15 @@ void execute_external_command(char* input) {
         return;
     }
     else if (pid == 0) {
+        if (background) {
+            setpgid(0, 0);
+        } else {
+            setpgid(0, 0);
+        }
+        
         signal(SIGINT, SIG_DFL);
         signal(SIGTSTP, SIG_DFL);
+        signal(SIGCHLD, SIG_DFL);
         
         if (input_file != NULL) {
             int fd_in = open(input_file, O_RDONLY);
@@ -139,21 +282,135 @@ void execute_external_command(char* input) {
         exit(127);
     }
     else {
-        foreground_pid = pid;
-        waitpid(pid, &status, WUNTRACED);
-        foreground_pid = 0;
+        setpgid(pid, pid);
         
-        if (WIFEXITED(status)) {
-            last_exit_status = WEXITSTATUS(status);
-        }
-        else if (WIFSIGNALED(status)) {
-            last_exit_status = 128 + WTERMSIG(status);
-        }
-        else if (WIFSTOPPED(status)) {
-            printf("\n[1]+  Stopped                 %s", input);
-            last_exit_status = 128 + WSTOPSIG(status);
+        if (background) {
+            int job_id = add_job(pid, pid, input, 1);
+            printf("[%d] %d\n", job_id, pid);
+        } else {
+            foreground_pid = pid;
+            tcsetpgrp(STDIN_FILENO, pid);
+            
+            waitpid(pid, &status, WUNTRACED);
+            
+            tcsetpgrp(STDIN_FILENO, shell_pgid);
+            foreground_pid = 0;
+            
+            if (WIFEXITED(status)) {
+                last_exit_status = WEXITSTATUS(status);
+            }
+            else if (WIFSIGNALED(status)) {
+                last_exit_status = 128 + WTERMSIG(status);
+            }
+            else if (WIFSTOPPED(status)) {
+                int job_id = add_job(pid, pid, input, 0);
+                printf("\n[%d]+  Stopped                 %s", job_id, input);
+                last_exit_status = 128 + WSTOPSIG(status);
+            }
         }
     }
+}
+
+void handle_jobs() {
+    cleanup_jobs();
+    
+    int found_jobs = 0;
+    for (int i = 0; i < MAX_JOBS; i++) {
+        if (jobs[i].job_id > 0 && jobs[i].status != DONE) {
+            char* status_str = (jobs[i].status == RUNNING) ? "Running" : "Stopped";
+            char marker = '+';
+            
+            printf("[%d]%c  %s                    %s", jobs[i].job_id, marker, status_str, jobs[i].command);
+            found_jobs = 1;
+        }
+    }
+    
+    if (!found_jobs) {
+        printf("");
+    }
+    
+    last_exit_status = 0;
+}
+
+void handle_fg(char* input) {
+    char* arg = input + 3;
+    while (*arg == ' ' || *arg == '\t') arg++;
+    
+    if (*arg != '%') {
+        printf("Usage: fg %%<job_id>\n");
+        return;
+    }
+    
+    int job_id = atoi(arg + 1);
+    job_t* job = find_job_by_id(job_id);
+    
+    if (job == NULL || job->status == DONE) {
+        printf("fg: job %d not found\n", job_id);
+        return;
+    }
+    
+    char clean_cmd[MAX_CMD_BUFFER];
+    strcpy(clean_cmd, job->command);
+    clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+    printf("%s\n", clean_cmd);
+    
+    if (job->status == STOPPED) {
+        kill(-job->pgid, SIGCONT);
+    }
+    
+    job->status = RUNNING;
+    job->is_background = 0;
+    
+    foreground_pid = job->pgid;
+    tcsetpgrp(STDIN_FILENO, job->pgid);
+    
+    int status;
+    waitpid(job->pid, &status, WUNTRACED);
+    
+    tcsetpgrp(STDIN_FILENO, shell_pgid);
+    foreground_pid = 0;
+    
+    if (WIFEXITED(status) || WIFSIGNALED(status)) {
+        remove_job(job_id);
+        last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
+    } else if (WIFSTOPPED(status)) {
+        job->status = STOPPED;
+        job->is_background = 0;
+    }
+}
+
+void handle_bg(char* input) {
+    char* arg = input + 3;
+    while (*arg == ' ' || *arg == '\t') arg++;
+    
+    if (*arg != '%') {
+        printf("Usage: bg %%<job_id>\n");
+        return;
+    }
+    
+    int job_id = atoi(arg + 1);
+    job_t* job = find_job_by_id(job_id);
+    
+    if (job == NULL || job->status == DONE) {
+        printf("bg: job %d not found\n", job_id);
+        return;
+    }
+    
+    if (job->status != STOPPED) {
+        printf("bg: job %d is not stopped\n", job_id);
+        return;
+    }
+    
+    job->status = RUNNING;
+    job->is_background = 1;
+    
+    char clean_cmd[MAX_CMD_BUFFER];
+    strcpy(clean_cmd, job->command);
+    clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+    printf("[%d]+ %s &\n", job->job_id, clean_cmd);
+    
+    kill(-job->pgid, SIGCONT);
+    last_exit_status = 0;
 }
 
 void handle_echo(char* input) {
@@ -205,8 +462,21 @@ int main(int argc, char* argv[]) {
     char buffer[MAX_CMD_BUFFER];
     FILE* input_stream = stdin;
     
+    shell_pgid = getpid();
+    if (setpgid(shell_pgid, shell_pgid) < 0) {
+        perror("Couldn't put the shell in its own process group");
+        exit(1);
+    }
+    
+    tcsetpgrp(STDIN_FILENO, shell_pgid);
+    
     signal(SIGINT, sigint_handler);
     signal(SIGTSTP, sigtstp_handler);
+    signal(SIGCHLD, sigchld_handler);
+    signal(SIGTTOU, SIG_IGN);
+    signal(SIGTTIN, SIG_IGN);
+    
+    init_jobs();
     
     if (argc > 1) {
         input_stream = fopen(argv[1], "r");
@@ -222,6 +492,8 @@ int main(int argc, char* argv[]) {
     memset(last_command, 0, MAX_CMD_BUFFER);
     
     while (1) {
+        cleanup_jobs();
+        
         if (!script_mode) {
             printf("icsh $ ");
             fflush(stdout);
@@ -245,6 +517,15 @@ int main(int argc, char* argv[]) {
         }
         else if (strcmp(cmd_copy, "!!") == 0) {
             handle_double_bang();
+        }
+        else if (strcmp(cmd_copy, "jobs") == 0) {
+            handle_jobs();
+        }
+        else if (strncmp(cmd_copy, "fg ", 3) == 0) {
+            handle_fg(cmd_copy);
+        }
+        else if (strncmp(cmd_copy, "bg ", 3) == 0) {
+            handle_bg(cmd_copy);
         }
         else if (strncmp(cmd_copy, "exit", 4) == 0) {
             handle_exit(buffer);

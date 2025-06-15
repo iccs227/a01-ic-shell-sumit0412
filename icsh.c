@@ -110,6 +110,7 @@ void cleanup_jobs() {
 void sigchld_handler(int sig) {
     pid_t pid;
     int status;
+    char clean_cmd[MAX_CMD_BUFFER];
     
     while ((pid = waitpid(-1, &status, WNOHANG | WUNTRACED)) > 0) {
         job_t* job = find_job_by_pid(pid);
@@ -117,18 +118,22 @@ void sigchld_handler(int sig) {
             if (WIFEXITED(status) || WIFSIGNALED(status)) {
                 job->status = DONE;
                 if (job->is_background) {
-                    printf("\n[%d]+  Done                    %s", job->job_id, job->command);
+                    strcpy(clean_cmd, job->command);
+                    clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+                    printf("\n[%d]+  Done                    %s", job->job_id, clean_cmd);
                     if (!script_mode) {
-                        printf("icsh $ ");
+                        printf("\nicsh $ ");
                     }
                     fflush(stdout);
                 }
                 last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
             } else if (WIFSTOPPED(status)) {
                 job->status = STOPPED;
-                printf("\n[%d]+  Stopped                 %s", job->job_id, job->command);
+                strcpy(clean_cmd, job->command);
+                clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+                printf("\n[%d]+  Stopped                 %s", job->job_id, clean_cmd);
                 if (!script_mode) {
-                    printf("icsh $ ");
+                    printf("\nicsh $ ");
                 }
                 fflush(stdout);
             }
@@ -295,11 +300,19 @@ void execute_external_command(char* input) {
             printf("[%d] %d\n", job_id, pid);
         } else {
             foreground_pid = pid;
+            
+            sigset_t mask, prev_mask;
+            sigemptyset(&mask);
+            sigaddset(&mask, SIGCHLD);
+            sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
             tcsetpgrp(STDIN_FILENO, pid);
             
             waitpid(pid, &status, WUNTRACED);
             
             tcsetpgrp(STDIN_FILENO, shell_pgid);
+            
+            sigprocmask(SIG_SETMASK, &prev_mask, NULL);
             foreground_pid = 0;
             
             if (WIFEXITED(status)) {
@@ -310,7 +323,10 @@ void execute_external_command(char* input) {
             }
             else if (WIFSTOPPED(status)) {
                 int job_id = add_job(pid, pid, input, 0);
-                printf("\n[%d]+  Stopped                 %s", job_id, input);
+                char clean_cmd[MAX_CMD_BUFFER];
+                strcpy(clean_cmd, input);
+                clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+                printf("\n[%d]+  Stopped                 %s", job_id, clean_cmd);
                 last_exit_status = 128 + WSTOPSIG(status);
             }
         }
@@ -318,23 +334,22 @@ void execute_external_command(char* input) {
 }
 
 void handle_jobs() {
-    cleanup_jobs();
-    
     int found_jobs = 0;
     for (int i = 0; i < MAX_JOBS; i++) {
         if (jobs[i].job_id > 0 && jobs[i].status != DONE) {
             char* status_str = (jobs[i].status == RUNNING) ? "Running" : "Stopped";
             char marker = '+';
-            
-            printf("[%d]%c  %s                    %s", jobs[i].job_id, marker, status_str, jobs[i].command);
+            char clean_cmd[MAX_CMD_BUFFER];
+            strcpy(clean_cmd, jobs[i].command);
+            clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+            printf("[%d]%c  %s                    %s\n", jobs[i].job_id, marker, status_str, clean_cmd);
             found_jobs = 1;
         }
     }
-    
     if (!found_jobs) {
-        printf("");
+        printf("\n");
     }
-    
+    fflush(stdout);
     last_exit_status = 0;
 }
 
@@ -368,12 +383,20 @@ void handle_fg(char* input) {
     job->is_background = 0;
     
     foreground_pid = job->pgid;
+
+    sigset_t mask, prev_mask;
+    sigemptyset(&mask);
+    sigaddset(&mask, SIGCHLD);
+    sigprocmask(SIG_BLOCK, &mask, &prev_mask);
+
     tcsetpgrp(STDIN_FILENO, job->pgid);
     
     int status;
     waitpid(job->pid, &status, WUNTRACED);
     
     tcsetpgrp(STDIN_FILENO, shell_pgid);
+
+    sigprocmask(SIG_SETMASK, &prev_mask, NULL);
     foreground_pid = 0;
     
     if (WIFEXITED(status) || WIFSIGNALED(status)) {
@@ -381,7 +404,13 @@ void handle_fg(char* input) {
         last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     } else if (WIFSTOPPED(status)) {
         job->status = STOPPED;
-        job->is_background = 0;
+        job->is_background = 1; 
+        char stopped_cmd[MAX_CMD_BUFFER];
+        strcpy(stopped_cmd, job->command);
+        stopped_cmd[strcspn(stopped_cmd, "\n")] = 0;
+        printf("\n[%d]+  Stopped                 %s", job->job_id, stopped_cmd);
+        fflush(stdout);
+        last_exit_status = 128 + WSTOPSIG(status);
     }
 }
 
@@ -499,7 +528,6 @@ int main(int argc, char* argv[]) {
     
     while (1) {
         cleanup_jobs();
-        
         if (!script_mode) {
             printf("icsh $ ");
             fflush(stdout);

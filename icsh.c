@@ -223,6 +223,34 @@ int is_background_command(char* input) {
     return (len > 0 && trimmed[len-1] == '&');
 }
 
+void handle_cd(char* input) {
+    char* path = input + 3;
+    while (*path == ' ' || *path == '\t') path++;
+    path[strcspn(path, "\n")] = 0;
+    
+    if (strlen(path) == 0) {
+        char* home = getenv("HOME");
+        if (home != NULL) {
+            if (chdir(home) != 0) {
+                perror("cd");
+                last_exit_status = 1;
+            } else {
+                last_exit_status = 0;
+            }
+        } else {
+            fprintf(stderr, "cd: HOME not set\n");
+            last_exit_status = 1;
+        }
+    } else {
+        if (chdir(path) != 0) {
+            perror("cd");
+            last_exit_status = 1;
+        } else {
+            last_exit_status = 0;
+        }
+    }
+}
+
 void execute_external_command(char* input) {
     pid_t pid;
     int status;
@@ -579,6 +607,10 @@ int main(int argc, char* argv[]) {
         }
         else if (strcmp(cmd_copy, "!!") == 0) {
             handle_double_bang();
+        }
+        else if (strncmp(cmd_copy, "cd", 2) == 0 && (cmd_copy[2] == ' ' || cmd_copy[2] == '\t' || cmd_copy[2] == '\0')) {
+            handle_cd(buffer);
+            strcpy(last_command, buffer);
         }
         else if (strcmp(cmd_copy, "jobs") == 0) {
             handle_jobs();

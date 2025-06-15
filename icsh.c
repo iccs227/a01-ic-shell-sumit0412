@@ -12,6 +12,7 @@
 #include <errno.h>
 #include <signal.h>
 #include <fcntl.h>
+#include <ctype.h>
 
 #define MAX_CMD_BUFFER 255
 #define MAX_ARGS 64
@@ -120,21 +121,19 @@ void sigchld_handler(int sig) {
                 if (job->is_background) {
                     strcpy(clean_cmd, job->command);
                     clean_cmd[strcspn(clean_cmd, "\n")] = 0;
-                    printf("\n[%d]+  Done                    %s", job->job_id, clean_cmd);
-                    if (!script_mode) {
-                        printf("\nicsh $ ");
-                    }
+                    printf("\n[%d]+  Done                    %s\n", job->job_id, clean_cmd);
                     fflush(stdout);
                 }
                 last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
             } else if (WIFSTOPPED(status)) {
                 job->status = STOPPED;
+                int len = strlen(job->command);
+                while (len > 0 && (isspace((unsigned char)job->command[len-1]) || job->command[len-1] == '&')) {
+                    job->command[--len] = '\0';
+                }
                 strcpy(clean_cmd, job->command);
                 clean_cmd[strcspn(clean_cmd, "\n")] = 0;
-                printf("\n[%d]+  Stopped                 %s", job->job_id, clean_cmd);
-                if (!script_mode) {
-                    printf("\nicsh $ ");
-                }
+                printf("\n[%d]+  Stopped                 %s\n", job->job_id, clean_cmd);
                 fflush(stdout);
             }
         }
@@ -326,7 +325,7 @@ void execute_external_command(char* input) {
                 char clean_cmd[MAX_CMD_BUFFER];
                 strcpy(clean_cmd, input);
                 clean_cmd[strcspn(clean_cmd, "\n")] = 0;
-                printf("\n[%d]+  Stopped                 %s", job_id, clean_cmd);
+                printf("\n[%d]+  Stopped                 %s\n", job_id, clean_cmd);
                 last_exit_status = 128 + WSTOPSIG(status);
             }
         }
@@ -342,6 +341,14 @@ void handle_jobs() {
             char clean_cmd[MAX_CMD_BUFFER];
             strcpy(clean_cmd, jobs[i].command);
             clean_cmd[strcspn(clean_cmd, "\n")] = 0;
+            
+            if (jobs[i].is_background && jobs[i].status == RUNNING) {
+                char* ampersand = strrchr(clean_cmd, '&');
+                if (ampersand == NULL) {
+                    strcat(clean_cmd, " &");
+                }
+            }
+            
             printf("[%d]%c  %s                    %s\n", jobs[i].job_id, marker, status_str, clean_cmd);
             found_jobs = 1;
         }
@@ -404,11 +411,15 @@ void handle_fg(char* input) {
         last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
     } else if (WIFSTOPPED(status)) {
         job->status = STOPPED;
-        job->is_background = 1; 
+        job->is_background = 1;
+        int len = strlen(job->command);
+        while (len > 0 && (isspace((unsigned char)job->command[len-1]) || job->command[len-1] == '&')) {
+            job->command[--len] = '\0';
+        }
         char stopped_cmd[MAX_CMD_BUFFER];
         strcpy(stopped_cmd, job->command);
         stopped_cmd[strcspn(stopped_cmd, "\n")] = 0;
-        printf("\n[%d]+  Stopped                 %s", job->job_id, stopped_cmd);
+        printf("\n[%d]+  Stopped                 %s\n", job->job_id, stopped_cmd);
         fflush(stdout);
         last_exit_status = 128 + WSTOPSIG(status);
     }
@@ -442,7 +453,20 @@ void handle_bg(char* input) {
     char clean_cmd[MAX_CMD_BUFFER];
     strcpy(clean_cmd, job->command);
     clean_cmd[strcspn(clean_cmd, "\n")] = 0;
-    printf("[%d]+ %s &\n", job->job_id, clean_cmd);
+    
+    int len = strlen(clean_cmd);
+    while (len > 0 && isspace((unsigned char)clean_cmd[len-1])) {
+        clean_cmd[--len] = '\0';
+    }
+    
+    job->is_background = 1;
+    
+    char bg_cmd[MAX_CMD_BUFFER];
+    strcpy(bg_cmd, clean_cmd);
+    strcat(bg_cmd, " &");
+    strcpy(job->command, bg_cmd);
+
+    printf("[%d]+ %s\n", job->job_id, bg_cmd);
     
     kill(-job->pgid, SIGCONT);
     last_exit_status = 0;
@@ -534,6 +558,10 @@ int main(int argc, char* argv[]) {
         }
         
         if (fgets(buffer, MAX_CMD_BUFFER, input_stream) == NULL) {
+            if (errno == EINTR) {
+                clearerr(input_stream);
+                continue;
+            }
             break;
         }
         

@@ -45,12 +45,13 @@ void parse_command(char* input, char* argv[]) {
     argv[argc] = NULL;
 }
 
-int parse_redirection(char* input, char* argv[], char** input_file, char** output_file) {
+int parse_redirection(char* input, char* argv[], char** input_file, char** output_file, int* append_mode) {
     int argc = 0;
     char* token = strtok(input, " \t\n");
     
     *input_file = NULL;
     *output_file = NULL;
+    *append_mode = 0;
     
     while (token != NULL && argc < MAX_ARGS - 1) {
         if (strcmp(token, "<") == 0) {
@@ -63,6 +64,14 @@ int parse_redirection(char* input, char* argv[], char** input_file, char** outpu
             token = strtok(NULL, " \t\n");
             if (token != NULL) {
                 *output_file = token;
+                *append_mode = 0;
+            }
+        }
+        else if (strcmp(token, ">>") == 0) {
+            token = strtok(NULL, " \t\n");
+            if (token != NULL) {
+                *output_file = token;
+                *append_mode = 1;
             }
         }
         else {
@@ -74,6 +83,10 @@ int parse_redirection(char* input, char* argv[], char** input_file, char** outpu
     return argc;
 }
 
+int has_redirection(char* input) {
+    return (strstr(input, " > ") != NULL || strstr(input, " < ") != NULL || strstr(input, " >> ") != NULL);
+}
+
 void execute_external_command(char* input) {
     pid_t pid;
     int status;
@@ -81,9 +94,10 @@ void execute_external_command(char* input) {
     char cmd_copy[MAX_CMD_BUFFER];
     char* input_file = NULL;
     char* output_file = NULL;
+    int append_mode = 0;
     
     strcpy(cmd_copy, input);
-    parse_redirection(cmd_copy, argv, &input_file, &output_file);
+    parse_redirection(cmd_copy, argv, &input_file, &output_file, &append_mode);
     
     pid = fork();
     
@@ -106,7 +120,12 @@ void execute_external_command(char* input) {
         }
         
         if (output_file != NULL) {
-            int fd_out = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            int fd_out;
+            if (append_mode) {
+                fd_out = open(output_file, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            } else {
+                fd_out = open(output_file, O_WRONLY | O_CREAT | O_TRUNC, 0644);
+            }
             if (fd_out < 0) {
                 perror(output_file);
                 exit(1);
@@ -158,7 +177,7 @@ void handle_double_bang() {
         strcpy(temp, last_command);
         temp[strcspn(temp, "\n")] = 0;
         
-        if (strncmp(temp, "echo ", 5) == 0) {
+        if (strncmp(temp, "echo ", 5) == 0 && !has_redirection(temp)) {
             handle_echo(last_command);
         }
         else if (strcmp(temp, "!!") != 0) {
@@ -220,7 +239,7 @@ int main(int argc, char* argv[]) {
         strcpy(cmd_copy, buffer);
         cmd_copy[strcspn(cmd_copy, "\n")] = 0;
         
-        if (strncmp(cmd_copy, "echo ", 5) == 0) {
+        if (strncmp(cmd_copy, "echo ", 5) == 0 && !has_redirection(cmd_copy)) {
             handle_echo(buffer);
             strcpy(last_command, buffer);
         }

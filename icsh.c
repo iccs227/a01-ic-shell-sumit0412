@@ -24,12 +24,14 @@ void sigint_handler(int sig) {
     if (foreground_pid > 0) {
         kill(foreground_pid, SIGINT);
     }
+    printf("\n");
 }
 
 void sigtstp_handler(int sig) {
     if (foreground_pid > 0) {
         kill(foreground_pid, SIGTSTP);
     }
+    printf("\n");
 }
 
 void parse_command(char* input, char* argv[]) {
@@ -72,6 +74,12 @@ void execute_external_command(char* input) {
         
         if (WIFEXITED(status)) {
             last_exit_status = WEXITSTATUS(status);
+        }
+        else if (WIFSIGNALED(status)) {
+            last_exit_status = 128 + WTERMSIG(status);
+        }
+        else if (WIFSTOPPED(status)) {
+            last_exit_status = 128 + WSTOPSIG(status);
         }
     }
 }

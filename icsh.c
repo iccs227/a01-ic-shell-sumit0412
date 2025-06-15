@@ -118,12 +118,18 @@ void sigchld_handler(int sig) {
                 job->status = DONE;
                 if (job->is_background) {
                     printf("\n[%d]+  Done                    %s", job->job_id, job->command);
+                    if (!script_mode) {
+                        printf("icsh $ ");
+                    }
                     fflush(stdout);
                 }
                 last_exit_status = WIFEXITED(status) ? WEXITSTATUS(status) : 128 + WTERMSIG(status);
             } else if (WIFSTOPPED(status)) {
                 job->status = STOPPED;
                 printf("\n[%d]+  Stopped                 %s", job->job_id, job->command);
+                if (!script_mode) {
+                    printf("icsh $ ");
+                }
                 fflush(stdout);
             }
         }

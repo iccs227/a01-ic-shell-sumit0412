@@ -31,7 +31,6 @@ void sigtstp_handler(int sig) {
     if (foreground_pid > 0) {
         kill(foreground_pid, SIGTSTP);
     }
-    printf("\n");
 }
 
 void parse_command(char* input, char* argv[]) {
@@ -69,7 +68,7 @@ void execute_external_command(char* input) {
     }
     else {
         foreground_pid = pid;
-        waitpid(pid, &status, 0);
+        waitpid(pid, &status, WUNTRACED);
         foreground_pid = 0;
         
         if (WIFEXITED(status)) {
@@ -79,6 +78,7 @@ void execute_external_command(char* input) {
             last_exit_status = 128 + WTERMSIG(status);
         }
         else if (WIFSTOPPED(status)) {
+            printf("\n[1]+  Stopped                 %s", input);
             last_exit_status = 128 + WSTOPSIG(status);
         }
     }
